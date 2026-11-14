@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+    <category label="共通設定">
+        <setting id="delay_between_xsp" type="number" label="バックグラウンド処理間隔(ミリ秒)" default="500" />
+        <setting id="delay_after_cleanup" type="number" label="XSP完了からソート開始までの待機(秒)" default="3" />
+        <setting id="xsp_interval" type="number" label="ライブラリ更新後の初期待機(秒)" default="5" />
+    </category>
+
+    <category label="データベース設定">
+        <setting id="auto_wal_convert" type="bool" label="WALモードを自動的に有効化する" default="true" />
+        <setting id="run_db_fix_toggle" type="bool" label="次回のOKクリック時にDB修復(WAL化)のみ実行" default="false" />
+    </category>
+
+    <category label="検証設定">
+        <setting id="run_verify_toggle" type="bool" label="次回のOKクリック時に検証を開始する" default="false" />
+        <setting id="loop_count" type="number" label="検証時のループ実行回数" default="1" />
+    </category>
+
+    <category label="キャッシュ設定">
+        <setting id="enable_texturecache" type="bool" label="完了後にバックグラウンドでキャッシュ作成を実行" default="true" />
+        <setting id="texturecache_url" type="text" label="texturecache.py ダウンロードURL" default="https://raw.githubusercontent.com/MilhouseVH/texturecache.py/master/texturecache.py" />
+        <setting id="download_cache_script" type="action" label="texturecache.py をダウンロード・更新" action="RunScript(service.repair, download_script)" />
+    </category>
+    
+    <category label="通知設定(Gmail)">
+        <setting id="send_email" type="bool" label="完了後にGmailを送信する" default="false" />
+        <setting id="gmail_user" type="text" label="Gmailアドレス" default="" />
+        <setting id="gmail_pass" type="text" label="アプリパスワード" default="" />
+        <setting id="gmail_dest" type="text" label="送信先アドレス" default="" />
+        
+        <setting id="mail_subject_normal" type="text" label="通常通知の件名" default="メンテナンス完了報告" />
+        <setting id="mail_subject_verify" type="text" label="検証通知の件名" default="【検証完了】" />
+        <setting id="mail_body_template" type="text" label="本文テンプレート" default="バックグラウンドでの{mode}更新（{count}件）を完了しました。" />
+
+        <setting id="db_diag_title" type="text" label="DB診断結果のタイトル" default="■ データベース診断結果:" />
+        <setting id="db_wal_warning" type="text" label="WAL未設定時の警告文" default="【重要】WALモードでないDBがあります。KODI終了後に実行を推奨：" />
+
+    </category>
+</settings>
