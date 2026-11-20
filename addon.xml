@@ -1,4 +1,4 @@
-<addon id="service.repair" name="KODI リペア" version="2.0.2" provider-name="ncos1">
+<addon id="service.repair" name="KODI リペア" version="2.1.10" provider-name="ncos1">
   <extension point="xbmc.service" library="default.py" start="startup" />
   
   <extension point="xbmc.addon.metadata">
@@ -6,7 +6,7 @@
       <icon>icon.png</icon>
     </assets>
     <summary lang="ja">XSP同期とトラックソート異常防止サービス</summary>
-    <description lang="ja">ライブラリ更新後に自動でスマートプレイリストの階層スキャン・同期・トラック順ソートの実施・データベースのWALモード変更実施。</description>
+    <description lang="ja">ライブラリ更新後に自動でスマートプレイリストの階層スキャン・同期・トラック順ソートの実施・データベースのWALモード変更実施。起動時にUPnPウォームアップ（再起動後の保存キュー対策）を実行可能。</description>
     <platform>all</platform>
   </extension>
 </addon>
