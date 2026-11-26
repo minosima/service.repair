@@ -66,8 +66,6 @@ def send_notification_mail(subject, body):
         msg['Date'] = formatdate(localtime=True)
 
         context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
 
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, context=context)
         server.login(gmail_user, gmail_pass)
@@ -494,6 +492,11 @@ def run_upnp_warmup(monitor):
         order_sql = WARMUP_ORDER_SQL.get(order_label, 'idSong ASC')
         if order_label not in WARMUP_ORDER_SQL:
             order_label = 'ID順（古い順）'
+        workers = addon.getSettingInt("warmup_parallel")
+        if workers < 1:
+            workers = 1
+        if workers > 8:
+            workers = 8
 
         # ---- 異常終了ガード：前回が「実行中」のまま消えていたら、
         # そのときの設定値を容疑値とし、今回は実績のある値で走る。
@@ -537,7 +540,7 @@ def run_upnp_warmup(monitor):
             dialog.notification(addon_name, f"UPnPウォームアップ: 前回未完了のため、今回だけ間隔{interval_ms}msで実行（設定は変更していません）", xbmcgui.NOTIFICATION_WARNING, 10000)
         else:
             interval_ms = configured_interval
-        xbmc.log(f"[{addon_name}] UPnP Warmup: start (interval={interval_ms}ms, configured={configured_interval}ms, order={order_label}, start_delay={start_delay}s)", xbmc.LOGINFO)
+        xbmc.log(f"[{addon_name}] UPnP Warmup: start (interval={interval_ms}ms, configured={configured_interval}ms, order={order_label}, start_delay={start_delay}s, parallel={workers})", xbmc.LOGINFO)
 
         if start_delay > 0 and not _upnp_warmup_sleep(monitor, start_delay):
             xbmc.log(f"[{addon_name}] UPnP Warmup: aborted during start delay (Kodi shutdown)", xbmc.LOGINFO)
@@ -663,12 +666,16 @@ def run_upnp_warmup(monitor):
             # 次回起動時にガードが検知できるようにする
             t_run = time.time()
             wu_state = {'phase': 'running', 'interval_used': interval_ms,
-                        'configured_interval': configured_interval, 'progress': 0,
+                        'configured_interval': configured_interval, 'workers': workers, 'progress': 0,
                         'elapsed_sec': 0,
                         'last_good_interval': last_good, 'suspect_interval': suspect}
             _warmup_state_save(wu_state)
             completed = False
 
+            # まず全曲分の ObjectID を組み立てる（DBの読み切りは数秒）。
+            # そのうえで、要求の送信だけをワーカースレッドで並列化する。
+            # 並列数1なら、従来と同じ動きになる
+            items = []
             for line in itertools.chain([first_line], row_iter):
                 line = line.rstrip('\n')
                 if not line:
@@ -681,57 +688,107 @@ def run_upnp_warmup(monitor):
                 ext = file_name.rsplit('.', 1)[-1]
                 oid = base64.b64encode(
                     f"musicdb://songs/{id_song}.{ext}".encode('utf-8')).decode('ascii')
+                items.append((id_song, oid))
 
-                # 1曲分。接続エラー（UPnPサーバー未起動など）は
-                # 15秒待って同じ曲を再試行する（最大8回）
-                retries = 0
-                while True:
-                    try:
-                        _upnp_browse_metadata_once(control_url, oid)
-                        ok += 1
-                        consec_fail = 0
-                        break
-                    except urllib.error.HTTPError as e:
-                        failed += 1
-                        consec_fail += 1
-                        if failed <= 5:
-                            xbmc.log(f"[{addon_name}] UPnP Warmup: track failed idSong={id_song}: HTTP {e.code}", xbmc.LOGWARNING)
-                        break
-                    except urllib.error.URLError:
-                        retries += 1
-                        if retries > 8:
-                            failed += 1
-                            consec_fail += 1
-                            xbmc.log(f"[{addon_name}] UPnP Warmup: UPnP server unreachable, giving up on idSong={id_song}", xbmc.LOGWARNING)
-                            break
-                        xbmc.log(f"[{addon_name}] UPnP Warmup: UPnP server not reachable yet (retry {retries}/8), waiting 15s", xbmc.LOGWARNING)
-                        if not _upnp_warmup_sleep(monitor, 15):
-                            aborted = True
-                            break
-                    except Exception as e:
-                        failed += 1
-                        consec_fail += 1
-                        if failed <= 5:
-                            xbmc.log(f"[{addon_name}] UPnP Warmup: track failed idSong={id_song}: {str(e)}", xbmc.LOGWARNING)
-                        break
-                if aborted:
-                    break
+            # 並列実行の共有状態。カウンタ類はロックで守る
+            lock = threading.Lock()
+            stop_event = threading.Event()
+            cnt = {'ok': 0, 'failed': 0, 'done': 0, 'consec': 0}
+            next_pos = [0]
+            last_milestone = [0]
 
-                done += 1
-                if consec_fail >= 20:
-                    xbmc.log(f"[{addon_name}] UPnP Warmup: 20 consecutive failures - aborting this run", xbmc.LOGERROR)
-                    break
-                if done % 500 == 0:
-                    xbmc.log(f"[{addon_name}] UPnP Warmup: progress {done}/{total} ok={ok} failed={failed} elapsed={time.time() - t_start:.0f}s", xbmc.LOGINFO)
-                    wu_state['progress'] = done
-                    wu_state['elapsed_sec'] = time.time() - t_run
-                    _warmup_state_save(wu_state)
-                if interval_ms > 0:
-                    if not _upnp_warmup_sleep(monitor, interval_ms / 1000.0):
-                        aborted = True
-                        break
-            else:
-                completed = True
+            def _wait(sec):
+                # 打ち切り（Kodi終了・連続失敗での中止）に応答する小刻みな待機
+                end = time.time() + sec
+                while time.time() < end:
+                    if stop_event.is_set() or monitor.abortRequested():
+                        return False
+                    time.sleep(min(0.25, end - time.time()))
+                return not (stop_event.is_set() or monitor.abortRequested())
+
+            def _worker():
+                while not stop_event.is_set() and not monitor.abortRequested():
+                    with lock:
+                        pos = next_pos[0]
+                        next_pos[0] = pos + 10
+                    if pos >= len(items):
+                        return
+                    for id_song, oid in items[pos:pos + 10]:
+                        if stop_event.is_set() or monitor.abortRequested():
+                            return
+                        # 1曲分。接続エラー（UPnPサーバー未起動など）は
+                        # 15秒待って同じ曲を再試行する（最大8回）
+                        retries = 0
+                        while True:
+                            try:
+                                _upnp_browse_metadata_once(control_url, oid)
+                                with lock:
+                                    cnt['ok'] += 1
+                                    cnt['consec'] = 0
+                                break
+                            except urllib.error.HTTPError as e:
+                                with lock:
+                                    cnt['failed'] += 1
+                                    cnt['consec'] += 1
+                                    nfail = cnt['failed']
+                                if nfail <= 5:
+                                    xbmc.log(f"[{addon_name}] UPnP Warmup: track failed idSong={id_song}: HTTP {e.code}", xbmc.LOGWARNING)
+                                break
+                            except urllib.error.URLError:
+                                retries += 1
+                                if retries > 8:
+                                    with lock:
+                                        cnt['failed'] += 1
+                                        cnt['consec'] += 1
+                                    xbmc.log(f"[{addon_name}] UPnP Warmup: UPnP server unreachable, giving up on idSong={id_song}", xbmc.LOGWARNING)
+                                    break
+                                xbmc.log(f"[{addon_name}] UPnP Warmup: UPnP server not reachable yet (retry {retries}/8), waiting 15s", xbmc.LOGWARNING)
+                                if not _wait(15):
+                                    return
+                            except Exception as e:
+                                with lock:
+                                    cnt['failed'] += 1
+                                    cnt['consec'] += 1
+                                    nfail = cnt['failed']
+                                if nfail <= 5:
+                                    xbmc.log(f"[{addon_name}] UPnP Warmup: track failed idSong={id_song}: {str(e)}", xbmc.LOGWARNING)
+                                break
+                        with lock:
+                            cnt['done'] += 1
+                            done_now = cnt['done']
+                            consec_now = cnt['consec']
+                            ok_now = cnt['ok']
+                            failed_now = cnt['failed']
+                            milestone = done_now // 500
+                            do_log = milestone > last_milestone[0]
+                            if do_log:
+                                last_milestone[0] = milestone
+                        if consec_now >= 20:
+                            xbmc.log(f"[{addon_name}] UPnP Warmup: 20 consecutive failures - aborting this run", xbmc.LOGERROR)
+                            stop_event.set()
+                            return
+                        if do_log:
+                            xbmc.log(f"[{addon_name}] UPnP Warmup: progress {done_now}/{total} ok={ok_now} failed={failed_now} elapsed={time.time() - t_start:.0f}s", xbmc.LOGINFO)
+                            wu_state['progress'] = done_now
+                            wu_state['elapsed_sec'] = time.time() - t_run
+                            _warmup_state_save(wu_state)
+                        if interval_ms > 0:
+                            if not _wait(interval_ms / 1000.0):
+                                return
+
+            threads = []
+            for _ in range(workers):
+                th = threading.Thread(target=_worker, daemon=True)
+                th.start()
+                threads.append(th)
+            for th in threads:
+                th.join()
+            ok = cnt['ok']
+            failed = cnt['failed']
+            done = cnt['done']
+            if monitor.abortRequested():
+                aborted = True
+            completed = (done >= len(items)) and not aborted and not stop_event.is_set()
         finally:
             if proc.poll() is None:
                 proc.terminate()

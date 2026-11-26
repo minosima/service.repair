@@ -1,4 +1,4 @@
-<addon id="service.repair" name="KODI リペア" version="2.1.10" provider-name="ncos1">
+<addon id="service.repair" name="KODI リペア" version="2.1.12" provider-name="ncos1">
   <extension point="xbmc.service" library="default.py" start="startup" />
   
   <extension point="xbmc.addon.metadata">

@@ -41,6 +41,7 @@
         <setting id="enable_upnp_warmup" type="bool" label="起動時にUPnPウォームアップを実行する" default="false" />
         <setting id="warmup_control_url" type="text" label="Kodi UPnPコントロールURL（空欄なら自動取得）" default="" />
         <setting id="warmup_interval_ms" type="number" label="メタデータ要求の間隔(ミリ秒)" default="100" />
+        <setting id="warmup_parallel" type="number" label="ウォームアップの並列数" default="1" />
         <setting id="warmup_start_delay_sec" type="number" label="起動後、開始までの待機(秒)" default="60" />
         <setting id="warmup_guard_grace_min" type="number" label="異常終了ガードの猶予時間(分)" default="10" />
         <setting id="warmup_order" type="select" label="読み込み順" values="ID順（古い順）|ID順（新しい順）|追加日の新しい順|曲名順|ランダム" default="ID順（古い順）" />
